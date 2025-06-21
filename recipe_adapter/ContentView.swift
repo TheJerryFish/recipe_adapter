@@ -8,14 +8,22 @@
 import SwiftUI
 
 struct ContentView: View {
+    @State private var selectedImage: UIImage? = nil
+    @State private var isImagePickerPresented = false
+    @State private var categorizedRecipes: [String: [UIImage]] = [:]
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world test!!")
+        TabView {
+            UploadView(selectedImage: $selectedImage, categorizedRecipes: $categorizedRecipes, isImagePickerPresented: $isImagePickerPresented)
+                .tabItem {
+                    Label("Upload", systemImage: "square.and.arrow.up")
+                }
+
+            RecipesView(categorizedRecipes: $categorizedRecipes)
+                .tabItem {
+                    Label("Recipes", systemImage: "book")
+                }
         }
-        .padding()
     }
 }
 
