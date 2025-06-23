@@ -10,7 +10,7 @@ import SwiftUI
 struct ContentView: View {
     @State private var selectedImage: UIImage? = nil
     @State private var isImagePickerPresented = false
-    @State private var categorizedRecipes: [String: [UIImage]] = [:]
+    @State private var categorizedRecipes: [String: [RecipeData]] = [:]
 
     var body: some View {
         TabView {

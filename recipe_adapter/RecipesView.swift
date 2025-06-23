@@ -7,8 +7,15 @@
 
 import SwiftUI
 
+struct RecipeData: Identifiable {
+    let id = UUID()
+    let image: UIImage
+    let ingredients: [String]
+    let instructions: [String]
+}
+
 struct RecipesView: View {
-    @Binding var categorizedRecipes: [String: [UIImage]]
+    @Binding var categorizedRecipes: [String: [RecipeData]]
     @State private var showAddCategory = false
     @State private var showMinusCategory = false
     @State private var newCategoryName = ""
@@ -19,11 +26,17 @@ struct RecipesView: View {
                 ForEach(self.categorizedRecipes.keys.sorted(), id: \.self) { category in
                     Section(header: Text(category).font(.headline)) {
                         let recipes = self.categorizedRecipes[category] ?? []
-                        ForEach(recipes.indices, id: \.self) { index in
-                            Image(uiImage: recipes[index])
-                                .resizable()
-                                .scaledToFit()
-                                .frame(height: 200)
+                        ForEach(recipes) { recipe in
+                            NavigationLink(destination: DetailedView(
+                                image: recipe.image,
+                                ingredients: recipe.ingredients,
+                                instructions: recipe.instructions
+                            )) {
+                                Image(uiImage: recipe.image)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(height: 200)
+                            }
                         }
                         .onDelete { indices in
                             self.categorizedRecipes[category]?.remove(atOffsets: indices)
