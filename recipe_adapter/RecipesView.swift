@@ -17,7 +17,6 @@ struct RecipeData: Identifiable {
 struct RecipesView: View {
     @Binding var categorizedRecipes: [String: [RecipeData]]
     @State private var showAddCategory = false
-    @State private var showMinusCategory = false
     @State private var newCategoryName = ""
 
     var body: some View {
@@ -50,9 +49,7 @@ struct RecipesView: View {
             .navigationTitle("Recipes")
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: {
-                        showMinusCategory = true
-                    }) {
+                    NavigationLink(destination: CategoryManagerView(categorizedRecipes: $categorizedRecipes)) {
                         Image(systemName: "minus")
                     }
                 }
@@ -61,31 +58,6 @@ struct RecipesView: View {
                         showAddCategory = true
                     }) {
                         Image(systemName: "plus")
-                    }
-                }
-            }
-            .sheet(isPresented: $showMinusCategory) {
-                NavigationView {
-                    List {
-                        ForEach(self.categorizedRecipes.keys.sorted(), id: \.self) { category in
-                            HStack {
-                                Text(category)
-                                Spacer()
-                                Button(role: .destructive) {
-                                    self.categorizedRecipes.removeValue(forKey: category)
-                                } label: {
-                                    Image(systemName: "trash")
-                                }
-                            }
-                        }
-                    }
-                    .navigationTitle("Delete Category")
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") {
-                                showMinusCategory = false
-                            }
-                        }
                     }
                 }
             }
@@ -108,6 +80,42 @@ struct RecipesView: View {
                     }
                 }
                 .padding()
+            }
+        }
+    }
+}
+
+struct CategoryManagerView: View {
+    @Binding var categorizedRecipes: [String: [RecipeData]]
+    @State private var categoryToDelete: String? = nil
+
+    var body: some View {
+        List {
+            ForEach(categorizedRecipes.keys.sorted(), id: \.self) { category in
+                HStack {
+                    Text(category)
+                    Spacer()
+                    Button(role: .destructive) {
+                        categoryToDelete = category
+                    } label: {
+                        Image(systemName: "trash")
+                    }
+                }
+            }
+        }
+        .navigationTitle("Delete Category")
+        .alert("All Recipes under \"\(categoryToDelete ?? "")\" will be deleted!", isPresented: Binding<Bool>(
+            get: { categoryToDelete != nil },
+            set: { if !$0 { categoryToDelete = nil } }
+        )) {
+            Button("Delete", role: .destructive) {
+                if let category = categoryToDelete {
+                    categorizedRecipes.removeValue(forKey: category)
+                    categoryToDelete = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                categoryToDelete = nil
             }
         }
     }
