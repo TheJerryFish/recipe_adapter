@@ -131,44 +131,6 @@ struct UploadView: View {
         }
     }
     
-    func runIngredientParser(with text: String) {
-        let lines = text.split(separator: "\n").map { String($0) }
-
-        classifyLines(lines) { result in
-            guard let result = result else {
-                print("Classification failed")
-                return
-            }
-
-            var ingredients: [String] = []
-            var instructions: [String] = []
-
-            for item in result {
-                let label = item["label"] ?? ""
-                let line = item["line"] ?? ""
-
-                switch label {
-                case "ingredient":
-                    ingredients.append(line)
-                case "instruction":
-                    instructions.append(line)
-                default:
-                    break
-                }
-            }
-
-            print("=== INGREDIENTS ===")
-            for ing in ingredients {
-                print("- \(ing)")
-            }
-
-            print("\n=== INSTRUCTIONS ===")
-            for (index, step) in instructions.enumerated() {
-                print("\(index + 1). \(step)")
-            }
-        }
-    }
-    
     func recognizeText(image: UIImage) {
         guard let cgImage = image.cgImage else {
             print("Invalid image")
@@ -217,10 +179,10 @@ struct UploadView: View {
             let label = item["label"] ?? ""
             let line = item["line"] ?? ""
 
-            switch label {
-            case "ingredient":
+            switch label.lowercased() {
+            case "ingredient", "ingredients":
                 ingredients.append(line)
-            case "instruction":
+            case "instruction", "instructions":
                 instructions.append(line)
             default:
                 break
@@ -342,6 +304,47 @@ struct UploadView: View {
     
 }
 
+// Globally cached TinyLlama CoreML model instance
+let sharedTinyLlamaModel: MLModel = {
+    let url = Bundle.main.url(forResource: "TinyRecipeClassifier", withExtension: "mlmodelc")!
+    return try! MLModel(contentsOf: url)
+}()
+func runTinyLlama(inputIds: [Int32], attentionMask: [Int32]) -> String? {
+    guard Thread.isMainThread else {
+        var result: String?
+        DispatchQueue.main.sync {
+            result = runTinyLlama(inputIds: inputIds, attentionMask: attentionMask)
+        }
+        return result
+    }
+
+    guard UIApplication.shared.applicationState == .active else {
+        print("TinyLlama not run: app not in active state.")
+        return nil
+    }
+
+    do {
+        let input = try MLDictionaryFeatureProvider(dictionary: [
+            "input_ids": MLMultiArray.from(inputIds),
+            "attention_mask": MLMultiArray.from(attentionMask)
+        ])
+
+        let prediction = try sharedTinyLlamaModel.prediction(from: input)
+        if let logits = prediction.featureValue(for: "logits")?.multiArrayValue {
+            let values = (0..<logits.count).map { Float(truncating: logits[$0]) }
+            let predictedIndex = values[0] > values[1] ? 0 : 1
+            let label = predictedIndex == 0 ? "instruction" : "ingredients"
+            print("Predicted label: \(label), logits: \(values)")
+            return label
+        } else {
+            print("No logits in model output.")
+            return nil
+        }
+    } catch {
+        print("Failed to run TinyLlama model: \(error.localizedDescription)")
+        return nil
+    }
+}
 #Preview {
     UploadView(
         selectedImage: .constant(nil),
@@ -362,79 +365,40 @@ extension MLMultiArray {
 }
 
 func classifyLines(_ lines: [String], completion: @escaping ([[String: String]]?) -> Void) {
-    guard let modelURL = Bundle.main.url(forResource: "mt5_encoder", withExtension: "mlmodelc"),
-          let model = try? MLModel(contentsOf: modelURL),
-          let spiecePath = Bundle.main.path(forResource: "spiece", ofType: "model") else {
-        if Bundle.main.url(forResource: "mt5_encoder", withExtension: "mlmodelc") == nil {
-            print("Model not found in bundle.")
-        }
-        if Bundle.main.path(forResource: "spiece", ofType: "model") == nil {
-            print("SentencePiece model not found in bundle.")
-        }
-        print("Failed to load model or SentencePiece.")
-        completion(nil)
-        return
-    }
-
-    guard let processor = try? SentencepieceTokenizer(modelPath: spiecePath) else {
-        print("Failed to initialize SentencePiece processor.")
-        completion(nil)
-        return
-    }
-
-    func encodeWithSentencePiece(_ line: String, maxLength: Int = 128) -> [Int64] {
-        var tokenIds: [Int64]
-        do {
-            tokenIds = try processor.encode(line).map { Int64($0) }
-        } catch {
-            print("Tokenization failed: \(error.localizedDescription)")
-            tokenIds = []
-        }
-        // Append </s> if needed (usually id 1)
-        tokenIds.append(1)
-        if tokenIds.count < maxLength {
-            tokenIds += Array(repeating: 0, count: maxLength - tokenIds.count)  // pad with <pad> = 0
-        } else if tokenIds.count > maxLength {
-            tokenIds = Array(tokenIds.prefix(maxLength))
-        }
-        return tokenIds
-    }
-
     var results: [[String: String]] = []
-    print("Classifying lines: \(lines)")
     let dispatchGroup = DispatchGroup()
     let resultLock = NSLock()
 
+    // Simple fake tokenizer using ASCII values (now operates on a joined string)
+    func fakeTokenizer(_ text: String, maxLength: Int = 32) -> ([Int32], [Int32]) {
+        var tokens = Array(repeating: Int32(0), count: maxLength)
+        var mask = Array(repeating: Int32(0), count: maxLength)
+        for (i, c) in text.prefix(maxLength).enumerated() {
+            tokens[i] = Int32(c.asciiValue ?? 0)
+            mask[i] = 1
+        }
+        return (tokens, mask)
+    }
+
     let operationQueue = OperationQueue()
     operationQueue.qualityOfService = .userInitiated
-    operationQueue.maxConcurrentOperationCount = 3
+    operationQueue.maxConcurrentOperationCount = 1
 
     for line in lines {
         dispatchGroup.enter()
         operationQueue.addOperation {
             autoreleasepool {
                 defer { dispatchGroup.leave() }
-                print("Classifying line: \"\(line)\"")
-                do {
-                    let input_ids = encodeWithSentencePiece(line)
-                    let inputFeatures = try MLDictionaryFeatureProvider(dictionary: [
-                        "input_ids": MLMultiArray.from(input_ids.map(Int32.init))
-                    ])
-                    let prediction = try model.prediction(from: inputFeatures)
-                    print("Raw prediction: \(prediction)")
-                    if let label = prediction.featureValue(for: "label")?.stringValue {
-                        print("→ Result: \(label)")
-                        resultLock.lock()
-                        results.append(["label": label, "line": line])
-                        resultLock.unlock()
-                    }
-                } catch {
-                    print("Prediction failed for line '\(line)': \(error.localizedDescription)")
-                }
+
+                print("Classifying line with TinyLlama: \"\(line)\"")
+                let (inputIds, attentionMask) = fakeTokenizer(line)
+                let label = runTinyLlama(inputIds: inputIds, attentionMask: attentionMask) ?? "noclue"
+                resultLock.lock()
+                results.append(["label": label, "line": line])
+                resultLock.unlock()
             }
         }
     }
-
     dispatchGroup.notify(queue: .main) {
         completion(results)
     }
