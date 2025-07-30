@@ -1,14 +1,9 @@
 from flask import Flask, request, jsonify
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
+import coremltools as ct
 
 app = Flask(__name__)
 
-# Load the T5 model and tokenizer
-model_name = "google/flan-t5-base"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
-
-classifier = pipeline("text2text-generation", model=model, tokenizer=tokenizer)
+model = ct.models.MLModel("RecipeTextClassifier.mlpackage")
 
 @app.route("/classify", methods=["POST"])
 def classify_lines():
@@ -19,19 +14,11 @@ def classify_lines():
         return jsonify({"error": "Missing or invalid 'lines' array"}), 400
 
     labeled = []
-    valid_labels = {"ingredient", "instruction", "other"}
 
     for line in lines:
-        prompt = (
-            "Classify this line as either 'ingredient', 'instruction', or 'other'.\n"
-            f"Line: {line}\n"
-            "Label:"
-        )
         try:
-            result = classifier(prompt, max_new_tokens=5)[0]["generated_text"]
-            label = result.strip().lower()
-            if label not in valid_labels:
-                label = "unknown"
+            prediction = model.predict({"text": line})
+            label = prediction["label"]
         except Exception as e:
             label = "error"
 

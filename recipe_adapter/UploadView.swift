@@ -304,47 +304,6 @@ struct UploadView: View {
     
 }
 
-// Globally cached TinyLlama CoreML model instance
-let sharedTinyLlamaModel: MLModel = {
-    let url = Bundle.main.url(forResource: "TinyRecipeClassifier", withExtension: "mlmodelc")!
-    return try! MLModel(contentsOf: url)
-}()
-func runTinyLlama(inputIds: [Int32], attentionMask: [Int32]) -> String? {
-    guard Thread.isMainThread else {
-        var result: String?
-        DispatchQueue.main.sync {
-            result = runTinyLlama(inputIds: inputIds, attentionMask: attentionMask)
-        }
-        return result
-    }
-
-    guard UIApplication.shared.applicationState == .active else {
-        print("TinyLlama not run: app not in active state.")
-        return nil
-    }
-
-    do {
-        let input = try MLDictionaryFeatureProvider(dictionary: [
-            "input_ids": MLMultiArray.from(inputIds),
-            "attention_mask": MLMultiArray.from(attentionMask)
-        ])
-
-        let prediction = try sharedTinyLlamaModel.prediction(from: input)
-        if let logits = prediction.featureValue(for: "logits")?.multiArrayValue {
-            let values = (0..<logits.count).map { Float(truncating: logits[$0]) }
-            let predictedIndex = values[0] > values[1] ? 0 : 1
-            let label = predictedIndex == 0 ? "instruction" : "ingredients"
-            print("Predicted label: \(label), logits: \(values)")
-            return label
-        } else {
-            print("No logits in model output.")
-            return nil
-        }
-    } catch {
-        print("Failed to run TinyLlama model: \(error.localizedDescription)")
-        return nil
-    }
-}
 #Preview {
     UploadView(
         selectedImage: .constant(nil),
@@ -353,54 +312,25 @@ func runTinyLlama(inputIds: [Int32], attentionMask: [Int32]) -> String? {
     )
 }
 
-extension MLMultiArray {
-    static func from(_ intArray: [Int32]) -> MLMultiArray {
-        let shape: [NSNumber] = [1, NSNumber(value: intArray.count)]
-        let mlArray = try! MLMultiArray(shape: shape, dataType: .int32)
-        for (i, value) in intArray.enumerated() {
-            mlArray[i] = NSNumber(value: value)
-        }
-        return mlArray
-    }
-}
 
 func classifyLines(_ lines: [String], completion: @escaping ([[String: String]]?) -> Void) {
     var results: [[String: String]] = []
-    let dispatchGroup = DispatchGroup()
-    let resultLock = NSLock()
-
-    // Simple fake tokenizer using ASCII values (now operates on a joined string)
-    func fakeTokenizer(_ text: String, maxLength: Int = 32) -> ([Int32], [Int32]) {
-        var tokens = Array(repeating: Int32(0), count: maxLength)
-        var mask = Array(repeating: Int32(0), count: maxLength)
-        for (i, c) in text.prefix(maxLength).enumerated() {
-            tokens[i] = Int32(c.asciiValue ?? 0)
-            mask[i] = 1
-        }
-        return (tokens, mask)
-    }
-
-    let operationQueue = OperationQueue()
-    operationQueue.qualityOfService = .userInitiated
-    operationQueue.maxConcurrentOperationCount = 1
-
     for line in lines {
-        dispatchGroup.enter()
-        operationQueue.addOperation {
-            autoreleasepool {
-                defer { dispatchGroup.leave() }
-
-                print("Classifying line with TinyLlama: \"\(line)\"")
-                let (inputIds, attentionMask) = fakeTokenizer(line)
-                let label = runTinyLlama(inputIds: inputIds, attentionMask: attentionMask) ?? "noclue"
-                resultLock.lock()
+        do {
+            let modelURL = Bundle.main.url(forResource: "RecipeTextClassifier", withExtension: "mlmodelc")!
+            let model = try MLModel(contentsOf: modelURL)
+            let input = try MLDictionaryFeatureProvider(dictionary: ["text": line])
+            let prediction = try model.prediction(from: input)
+            if let label = prediction.featureValue(for: "label")?.stringValue {
                 results.append(["label": label, "line": line])
-                resultLock.unlock()
+            } else {
+                results.append(["label": "error", "line": line])
             }
+        } catch {
+            print("Classification error for line '\(line)': \(error)")
+            results.append(["label": "error", "line": line])
         }
     }
-    dispatchGroup.notify(queue: .main) {
-        completion(results)
-    }
+    completion(results)
 }
 
